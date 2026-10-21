@@ -132,7 +132,8 @@ class RangingSession:
     # Per-frame entry points
     # ------------------------------------------------------------------ #
     def process(self, stem, image_rgb, points, T_lidar_to_cam, *,
-                vggt_depth=None, out_dir=None, ref_tree=None):
+                vggt_depth=None, out_dir=None, ref_tree=None,
+                intrinsics=None):
         """Run person + wire ranging on one in-memory frame (no file I/O).
 
         Args:
@@ -147,11 +148,16 @@ class RangingSession:
                              range.txt / range_2d.jpg / range.ply.
             ref_tree:        optional manual-reference wire KD-tree
                              (scene-specific; the CLI's --write_ref).
+            intrinsics:      optional per-call (fx, fy, cx, cy) override
+                             (e.g. from a CameraInfo message); None uses
+                             the session's intrinsics.
 
         Returns the result dict (adds ``error`` on failure).
         """
+        if intrinsics is None:
+            intrinsics = self.intrinsics
         H, W = image_rgb.shape[:2]
-        if self.intrinsics is None and (H, W) != (720, 1280):
+        if intrinsics is None and (H, W) != (720, 1280):
             print(f"[warn] {stem}: image is {W}x{H}, expected 1280x720 -- the "
                   f"built-in intrinsics are calibrated for 1280x720; pass "
                   f"intrinsics=('fx','fy','cx','cy') to RangingSession",
@@ -161,7 +167,7 @@ class RangingSession:
             stem, image_rgb, points, T_lidar_to_cam, self.wire_curve,
             self.ttpla, self.det_model, self.sam2_predictor, self.args,
             self.script_dir, ref_tree=ref_tree, out_dir=out_dir,
-            intrinsics=self.intrinsics, vggt_depth=vggt_depth)
+            intrinsics=intrinsics, vggt_depth=vggt_depth)
 
     def process_frame_files(self, stem, ref_tree=None):
         """Load one frame from data/ (same layout as the CLI) and run it.

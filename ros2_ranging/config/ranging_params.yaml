@@ -1,0 +1,35 @@
+# Default parameters for the ranging_node (ros2_ranging).
+# Every entry maps 1:1 onto a range_person_wire.py CLI flag of the same name
+# (see the table in ros2_ranging/README.md); empty string = CLI default.
+ranging_node:
+  ros__parameters:
+    # open-vocabulary person detection (YOLO-World texts, comma-separated)
+    categories: "person"
+
+    # wire branch: "per_frame" (TTPLA re-detected per frame, default) or
+    # "catenary" (static precomputed curve)
+    wire_mode: "per_frame"
+    wire_curve: ""               # [catenary] path to catenary_curve.txt
+
+    # camera intrinsics 'fx,fy,cx,cy'; '' = built-in 1280x720 calibration.
+    # A CameraInfo message on camera_info_topic overrides this at runtime.
+    intrinsics: ""
+
+    # per-frame viz dump (range.json/range.txt/range_2d.jpg/range.ply);
+    # '' = disabled (production default)
+    out_dir: ""
+    # optional VGGT depth cache dir; '' = nearest-cluster fallback (degraded)
+    vggt_depth_dir: ""
+
+    sam2: true                   # SAM2 mask refinement
+    device: "cuda:0"             # "cpu" if no GPU
+
+    # TF frames: extrinsics = lookup(frame_id_lidar, frame_id_camera, stamp)
+    frame_id_lidar: "lidar"
+    frame_id_camera: "camera"
+
+    image_topic: "/camera/image"
+    cloud_topic: "/lidar/points"
+    camera_info_topic: "/camera/info"
+    sync_slop: 0.1               # seconds, image/cloud approx-time sync
+    publish_on_error: true       # publish result JSON even on frame errors
