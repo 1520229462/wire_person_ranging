@@ -134,7 +134,7 @@ python download_weights.py
 | `weights/yoloworld/yolov8m-worldv2.pt` | 开集检测器（默认） | ultralytics release | AGPL-3.0 |
 | `weights/sam2/sam2.1_hiera_base_plus.pt` | SAM2 掩膜 | facebook/sam2.1 | Apache-2.0 |
 | `weights/clip/ViT-B-32.pt` | CLIP 文本编码器（YOLO-World `set_classes` 必需） | OpenAI | MIT |
-| `weights/ttpla/yolo11s_seg_1280.pt` | **导线分割（`per_frame` 默认必需）** | 本团队微调 | AGPL-3.0（衍生） |
+| `weights/ttpla/yolo11s_seg_1280.pt` | **导线分割（`per_frame` 默认必需）** |  | AGPL-3.0（衍生） |
 | `weights/owlv2/`（可选） | OWLv2 兜底检测器 | google/owlv2 | Apache-2.0 |
 
 **私有分发项（TTPLA checkpoint 与 VGGT 深度缓存）**：这两个文件不公开发布，
