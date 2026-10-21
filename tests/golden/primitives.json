@@ -1,0 +1,39 @@
+{
+  "project": {
+    "u_sha": "c97471eb54462fcd",
+    "v_sha": "ec73d034cf139c0d",
+    "z_sha": "387912aa9dc2351c",
+    "n_points": 5698,
+    "T_lidar_to_cam_sha": "9a8a6f0f28dab457"
+  },
+  "skeleton_polyline": {
+    "n": 66,
+    "us_sha": "017b792a680ad9a7",
+    "vs_sha": "a81c9f3fdbe2996f",
+    "ss_sha": "588a413dfcd0db46",
+    "s0": 0.0,
+    "s_last": 81.569
+  },
+  "endpoint_extension": {
+    "tangent": [
+      -0.305736,
+      -0.072408,
+      0.949359
+    ],
+    "n_ext": 20,
+    "ext_sha": "c3a936d58daaa806",
+    "z_max": 2.951
+  },
+  "line_consensus": {
+    "n_inliers": 7,
+    "inliers": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6
+    ]
+  }
+}
