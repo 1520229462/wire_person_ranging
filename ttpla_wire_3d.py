@@ -296,6 +296,11 @@ def detect_wire_curve(model, stem, data_dir, conf=0.5, dilate=150,
     Same detection steps as `process_frame`, sharing the `_line_consensus`
     core, but writes no files.
 
+    Thin file-loading shell over `detect_wire_curve_arrays`: reads
+    images/<stem>.jpg (BGR), lidar/<stem>.bin and extrinsics/<stem>.txt from
+    `data_dir`, then delegates all numerics. Third-party code with in-memory
+    frames should call `detect_wire_curve_arrays` directly.
+
     Returns ``(curve, info)`` where ``curve`` is an ``(N,3)`` polyline in the
     lidar frame (``None`` on failure) and ``info["status"]`` is one of
     ``ok`` / ``no_line`` / ``mask_blowup`` / ``no_skeleton`` /
@@ -314,8 +319,34 @@ def detect_wire_curve(model, stem, data_dir, conf=0.5, dilate=150,
     T_cam_to_lidar = np.loadtxt(ext_path, dtype=np.float64)      # raw file content
     T_lidar_to_cam = np.linalg.inv(T_cam_to_lidar)
 
+    return detect_wire_curve_arrays(
+        model, img, points, T_lidar_to_cam, conf=conf, dilate=dilate,
+        lin_k=lin_k, lin_thr=lin_thr, gap_kmad=gap_kmad, min_size=min_size,
+        min_points=min_points, n_sample=n_sample, extend_m=extend_m,
+        extend_to_z=extend_to_z, extend_top_k=extend_top_k,
+        extend_step=extend_step, mask_max_area=mask_max_area, stem=stem)
+
+
+def detect_wire_curve_arrays(model, img_bgr, points, T_lidar_to_cam, conf=0.5,
+                             dilate=150, lin_k=12, lin_thr=0.9, gap_kmad=4.0,
+                             min_size=3, min_points=6, n_sample=100,
+                             extend_m=1.0, extend_to_z=3.0, extend_top_k=5,
+                             extend_step=0.05, mask_max_area=20000,
+                             intrinsics=None, stem=None):
+    """In-memory variant of `detect_wire_curve` (identical numerics, writes
+    nothing): inputs are already-loaded arrays instead of file paths.
+
+    Args:
+        model:       TTPLA YOLO segmentation model (ultralytics).
+        img_bgr:     (H,W,3) uint8 BGR image.
+        points:      (N,3) lidar-frame points (float64).
+        T_lidar_to_cam: 4x4 transform lidar -> camera frame.
+        intrinsics:  optional (fx, fy, cx, cy); None uses the built-in
+                     calibration of `open_vocab_3d_detect`.
+        stem:        frame id recorded in the returned info dict (cosmetic).
+    """
     # 1. TTPLA mask
-    mask, mconf = run_ttpla_line(model, img, conf=conf)
+    mask, mconf = run_ttpla_line(model, img_bgr, conf=conf)
     if mask is None:
         return None, {"stem": stem, "status": "no_line", "conf": mconf}
     area = int(mask.sum())
@@ -336,7 +367,11 @@ def detect_wire_curve(model, stem, data_dir, conf=0.5, dilate=150,
                                         np.uint8))
     ph = np.concatenate([points, np.ones((len(points), 1))], axis=1)
     p_cam = (T_lidar_to_cam @ ph.T).T[:, :3]
-    u, v, z = ovd.project(p_cam)
+    if intrinsics is None:
+        u, v, z = ovd.project(p_cam)
+    else:
+        fx, fy, cx, cy = intrinsics
+        u, v, z = ovd.project(p_cam, fx, fy, cx, cy)
     H, W = mask.shape
     valid = (z > 0.5) & (u >= 0) & (u < W - 1) & (v >= 0) & (v < H - 1)
     ui = np.floor(u[valid]).astype(int)
@@ -641,12 +676,17 @@ def main():
                     help="spacing (m) between extrapolated extension points")
     ap.add_argument("--mask_max_area", type=int, default=20000,
                     help="skip TTPLA mask above this area (px); 0 disables")
+    ap.add_argument("--gpu", type=int, default=0)
     args = ap.parse_args()
 
     os.makedirs(args.out_dir, exist_ok=True)
 
+    import torch
+    device = f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu"
+    if torch.cuda.is_available():
+        torch.cuda.set_device(args.gpu)
     from ultralytics import YOLO
-    model = YOLO(args.weights)
+    model = YOLO(args.weights).to(device)
 
     if args.frames == "all":
         stems = sorted(os.path.splitext(os.path.basename(p))[0]

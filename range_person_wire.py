@@ -34,6 +34,7 @@ import argparse
 import glob
 import json
 import os
+import re
 import sys
 
 import cv2
@@ -42,13 +43,14 @@ from scipy.spatial import cKDTree
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import open_vocab_3d_detect as ovd
+import deploy_utils
 from open_vocab_3d_detect import (
     load_lidar, project, fit_box, build_yoloworld, run_yoloworld,
     build_sam2, run_sam2, resolve_sam2_config, vggt_scale,
     vggt_target_template, _dbscan_labels, shape_chamfer, nearest_cluster,
     write_points_ply, RGB_WIRE, PTS_PERSON, PTS_WIRE)
 from ttpla_wire_3d import (run_ttpla_line, skeleton_polyline, detect_wire_curve,
-                           DEFAULT_WEIGHTS)
+                           detect_wire_curve_arrays, DEFAULT_WEIGHTS)
 from ttpla_wire_3d_catenary import collect_candidates, fit_catenary, _first_depth_gap
 from manual_wire_person_ref import (reference_wire, person_points,
                                     accumulate_frames)
@@ -177,9 +179,16 @@ def recompute_wire_curve(args, model, stems):
 # --------------------------------------------------------------------------- #
 def write_range_viz(out_dir, stem, image_np, person, wire_curve, p_cam, u, v, z,
                     T_lidar_to_cam, points, person_dist, wire_dist, pw_dist,
-                    closest_person, closest_wire, ref_dist=None):
+                    closest_person, closest_wire, ref_dist=None,
+                    intrinsics=None):
     os.makedirs(out_dir, exist_ok=True)
     H, W = image_np.shape[:2]
+
+    def _proj(pts_cam):
+        if intrinsics is None:
+            return project(pts_cam)
+        fx, fy, cx, cy = intrinsics
+        return project(pts_cam, fx, fy, cx, cy)
 
     # 2D: reproject the wire curve, the person box, and the closest-approach line
     img = image_np.copy()
@@ -187,7 +196,7 @@ def write_range_viz(out_dir, stem, image_np, person, wire_curve, p_cam, u, v, z,
     cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
     ch = np.concatenate([wire_curve, np.ones((len(wire_curve), 1))], axis=1)
     cc = (T_lidar_to_cam @ ch.T).T[:, :3]
-    cu, cvv, cz = project(cc)
+    cu, cvv, cz = _proj(cc)
     ok = (cz > 0.5) & (cu >= 0) & (cu < W - 1) & (cvv >= 0) & (cvv < H - 1)
     wire_2d = np.stack([cu[ok], cvv[ok]], axis=1).astype(int)
     cv2.polylines(img, [wire_2d], False, (255, 165, 0), 2)
@@ -196,7 +205,7 @@ def write_range_viz(out_dir, stem, image_np, person, wire_curve, p_cam, u, v, z,
     if len(psel):
         psel_h = np.concatenate([psel, np.ones((len(psel), 1))], axis=1)
         psel_c = (T_lidar_to_cam @ psel_h.T).T[:, :3]
-        psu, psv, psz = project(psel_c)
+        psu, psv, psz = _proj(psel_c)
         pok = (psz > 0.5) & (psu >= 0) & (psu < W - 1) & (psv >= 0) & (psv < H - 1)
         for px, py in zip(psu[pok], psv[pok]):
             cv2.circle(img, (int(px), int(py)), 1, PTS_PERSON, -1)
@@ -204,7 +213,7 @@ def write_range_viz(out_dir, stem, image_np, person, wire_curve, p_cam, u, v, z,
     seg = np.array([closest_person, closest_wire])
     sh = np.concatenate([seg, np.ones((2, 1))], axis=1)
     scc = (T_lidar_to_cam @ sh.T).T[:, :3]
-    su, sv, sz = project(scc)
+    su, sv, sz = _proj(scc)
     if (sz > 0.5).all():
         pa = (int(su[0]), int(sv[0]))
         pb = (int(su[1]), int(sv[1]))
@@ -256,7 +265,14 @@ def process_frame(stem, wire_curve, ttpla, det_model, sam2_predictor, args,
     curve is used. If `ref_tree` is given, the manual reference wire->person
     distance is computed too and written alongside. Writes range.json /
     range.txt / range_2d.jpg / range.ply. Returns a result dict, or None if
-    the frame has no data / no person."""
+    the frame has no data / no person.
+
+    Thin file-loading shell over `process_frame_arrays`: reads
+    images/<stem>.jpg, lidar/<stem>.bin, extrinsics/<stem>.txt and (if
+    present) vggt_depth/<stem>.npz from `args.data_dir` / `args.vggt_depth_dir`,
+    then delegates all numerics. Third-party code with in-memory frames should
+    call `process_frame_arrays` directly (see `ranging_api.RangingSession`).
+    """
     img_path = os.path.join(args.data_dir, "images", stem + ".jpg")
     lidar_path = os.path.join(args.data_dir, "lidar", stem + ".bin")
     ext_path = os.path.join(args.data_dir, "extrinsics", stem + ".txt")
@@ -266,21 +282,74 @@ def process_frame(stem, wire_curve, ttpla, det_model, sam2_predictor, args,
     from PIL import Image
     image_np = np.array(Image.open(img_path).convert("RGB"))
     H, W = image_np.shape[:2]
+    if (H, W) != (720, 1280):
+        print(f"[warn] {stem}: image is {W}x{H}, expected 1280x720 -- the "
+              f"built-in intrinsics are calibrated for 1280x720; pass "
+              f"--intrinsics to override", file=sys.stderr, flush=True)
     points = load_lidar(lidar_path)
     T_lidar_to_cam = ovd.load_extrinsic(ext_path)
-    p_h = np.concatenate([points, np.ones((len(points), 1))], axis=1)
-    p_cam = (T_lidar_to_cam @ p_h.T).T[:, :3]
-
-    u, v, z = project(p_cam)
-    valid = (z > args.min_dist) & (u >= 0) & (u < W - 1) & (v >= 0) & (v < H - 1)
-    ui = np.floor(u[valid]).astype(int)
-    vi = np.floor(v[valid]).astype(int)
-    valid_idx = np.nonzero(valid)[0]
 
     vggt_depth = None
     dpath = os.path.join(args.vggt_depth_dir, stem + ".npz")
     if os.path.exists(dpath):
         vggt_depth = np.load(dpath)["depth"]
+
+    return process_frame_arrays(
+        stem, image_np, points, T_lidar_to_cam, wire_curve, ttpla, det_model,
+        sam2_predictor, args, script_dir, ref_tree=ref_tree,
+        out_dir=os.path.join(args.out_dir, stem),
+        intrinsics=getattr(args, "intrinsics", None), vggt_depth=vggt_depth)
+
+
+def process_frame_arrays(stem, image_np, points, T_lidar_to_cam, wire_curve,
+                         ttpla, det_model, sam2_predictor, args, script_dir,
+                         ref_tree=None, out_dir=None, intrinsics=None,
+                         vggt_depth=None):
+    """In-memory variant of `process_frame` (identical numerics): all inputs
+    are arrays already in the process, no file reads.
+
+    Args:
+        stem:             frame id (used in the result dict / written files).
+        image_np:         (H,W,3) uint8 RGB image.
+        points:           (N,3) lidar-frame points (float64).
+        T_lidar_to_cam:   4x4 transform lidar -> camera frame.
+        wire_curve:       (M,3) static wire curve (used in catenary mode).
+        ttpla:            TTPLA YOLO model (per_frame wire mode only).
+        det_model:        YOLO-World detector with classes already set.
+        sam2_predictor:   SAM2 predictor, or None to skip mask refinement.
+        args:             argparse.Namespace with all tunables (same names as
+                          the CLI; see `ranging_api.RangingSession`).
+        script_dir:       repo root (for `build_yoloworld`'s CLIP resolution).
+        ref_tree:         optional manual-reference wire KD-tree (scene-specific).
+        out_dir:          per-frame output dir; None disables range.json /
+                          range.txt / range_2d.jpg / range.ply writes.
+        intrinsics:       optional (fx, fy, cx, cy); None uses the built-in
+                          calibration of `open_vocab_3d_detect`.
+        vggt_depth:       optional (H,W) float32 depth map; None degrades the
+                          person branch to the nearest-cluster fallback and
+                          sets ``result["degraded"] = True``.
+
+    Returns a result dict (adds ``error`` on failure), same schema as
+    `process_frame`'s return value.
+    """
+    H, W = image_np.shape[:2]
+    p_h = np.concatenate([points, np.ones((len(points), 1))], axis=1)
+    p_cam = (T_lidar_to_cam @ p_h.T).T[:, :3]
+
+    if intrinsics is None:
+        u, v, z = project(p_cam)
+    else:
+        fx, fy, cx, cy = intrinsics
+        u, v, z = project(p_cam, fx, fy, cx, cy)
+    valid = (z > args.min_dist) & (u >= 0) & (u < W - 1) & (v >= 0) & (v < H - 1)
+    ui = np.floor(u[valid]).astype(int)
+    vi = np.floor(v[valid]).astype(int)
+    valid_idx = np.nonzero(valid)[0]
+
+    if vggt_depth is None:
+        print(f"[warn] {stem}: no VGGT depth cache -- person branch degrades "
+              f"to the nearest-cluster fallback (result['degraded']=True)",
+              file=sys.stderr, flush=True)
 
     dets = detect_person(image_np, points, p_cam, vggt_depth, ui, vi,
                          valid_idx, z, det_model, sam2_predictor, args)
@@ -292,13 +361,15 @@ def process_frame(stem, wire_curve, ttpla, det_model, sam2_predictor, args,
     # absolute depth/height constants.
     wire_mode = args.wire_mode
     if wire_mode == "per_frame":
-        curve, winfo = detect_wire_curve(
-            ttpla, stem, args.data_dir, conf=args.conf, dilate=args.dilate,
+        curve, winfo = detect_wire_curve_arrays(
+            ttpla, cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR), points,
+            T_lidar_to_cam, conf=args.conf, dilate=args.dilate,
             lin_k=args.lin_k, lin_thr=args.lin_thr, gap_kmad=args.gap_kmad,
             min_size=args.min_size, min_points=args.wire_min_points,
             n_sample=args.n_sample, extend_m=args.extend_m,
             extend_to_z=args.extend_to_z, extend_top_k=args.extend_top_k,
-            extend_step=args.extend_step, mask_max_area=args.mask_max_area)
+            extend_step=args.extend_step, mask_max_area=args.mask_max_area,
+            intrinsics=intrinsics, stem=stem)
         if curve is None:
             return {"frame": stem, "error": f"wire_{winfo['status']}"}
         wire_curve = curve
@@ -327,10 +398,11 @@ def process_frame(stem, wire_curve, ttpla, det_model, sam2_predictor, args,
             d_ref, _ = ref_tree.query(pp, k=1)
             ref_dist = float(d_ref.min())
 
-    out_dir = os.path.join(args.out_dir, stem)
-    write_range_viz(out_dir, stem, image_np, person, wire_curve, p_cam, u, v, z,
-                    T_lidar_to_cam, points, person_dist, wire_dist, pw_dist,
-                    closest_person, closest_wire, ref_dist)
+    if out_dir is not None:
+        write_range_viz(out_dir, stem, image_np, person, wire_curve, p_cam, u,
+                        v, z, T_lidar_to_cam, points, person_dist, wire_dist,
+                        pw_dist, closest_person, closest_wire, ref_dist,
+                        intrinsics)
 
     def r3(a):
         return [round(float(x), 3) for x in a]
@@ -361,20 +433,23 @@ def process_frame(stem, wire_curve, ttpla, det_model, sam2_predictor, args,
         "closest_person_point": r3(closest_person),
         "closest_wire_point": r3(closest_wire),
     }
-    with open(os.path.join(out_dir, "range.json"), "w") as f:
-        json.dump(result, f, indent=2)
-    with open(os.path.join(out_dir, "range.txt"), "w") as f:
-        f.write(f"frame={stem}\n")
-        f.write(f"person  center={r3(pc)} distance={person_dist:.3f}m "
-                f"(template matching, score={person['score']:.2f})\n")
-        f.write(f"wire    endpoints={r3(wire_curve[0])} -> {r3(wire_curve[-1])} "
-                f"distance={wire_dist:.3f}m ({wire_mode})\n")
-        f.write(f"wire->person min distance = {pw_dist:.3f}m "
-                f"(person surface point {r3(closest_person)} <-> "
-                f"wire point {r3(closest_wire)})\n")
-        if ref_dist is not None:
-            f.write(f"wire->person min distance (ref) = {ref_dist:.3f}m  "
-                    f"(bias algo-ref = {pw_dist - ref_dist:+.3f}m)\n")
+    if vggt_depth is None:
+        result["degraded"] = True
+    if out_dir is not None:
+        with open(os.path.join(out_dir, "range.json"), "w") as f:
+            json.dump(result, f, indent=2)
+        with open(os.path.join(out_dir, "range.txt"), "w") as f:
+            f.write(f"frame={stem}\n")
+            f.write(f"person  center={r3(pc)} distance={person_dist:.3f}m "
+                    f"(template matching, score={person['score']:.2f})\n")
+            f.write(f"wire    endpoints={r3(wire_curve[0])} -> {r3(wire_curve[-1])} "
+                    f"distance={wire_dist:.3f}m ({wire_mode})\n")
+            f.write(f"wire->person min distance = {pw_dist:.3f}m "
+                    f"(person surface point {r3(closest_person)} <-> "
+                    f"wire point {r3(closest_wire)})\n")
+            if ref_dist is not None:
+                f.write(f"wire->person min distance (ref) = {ref_dist:.3f}m  "
+                        f"(bias algo-ref = {pw_dist - ref_dist:+.3f}m)\n")
     return result
 
 
@@ -391,9 +466,21 @@ def main():
     ap.add_argument("--frames", default="all",
                     help="frames to run person+ranging on ('all' or comma stems)")
     ap.add_argument("--write_ref", action=argparse.BooleanOptionalAction,
-                    default=True,
+                    default=False,
                     help="also write the manual reference wire->person distance "
-                         "(independent hand-specified standard) into the outputs")
+                         "(independent hand-specified standard, valid ONLY for "
+                         "the bundled demo scene) into the outputs")
+    # third-party integration
+    ap.add_argument("--intrinsics", default=None,
+                    help="camera intrinsics 'fx,fy,cx,cy' (comma-separated); "
+                         "default: built-in 1280x720 calibration "
+                         "(622.6716,694.2052,644.2907,522.0188)")
+    ap.add_argument("--categories", default="person",
+                    help="comma-separated open-vocabulary category texts for "
+                         "YOLO-World (default: 'person')")
+    ap.add_argument("--strict", action="store_true",
+                    help="treat soft frame errors (missing files, detection "
+                         "failures) as fatal: exit code 1")
     # wire
     ap.add_argument("--wire_mode", choices=["per_frame", "catenary"],
                     default="per_frame",
@@ -455,12 +542,28 @@ def main():
     ap.add_argument("--gpu", type=int, default=0)
     args = ap.parse_args()
 
+    if args.intrinsics:
+        parts = [t.strip() for t in args.intrinsics.split(",")]
+        if len(parts) != 4:
+            ap.error("--intrinsics must be 'fx,fy,cx,cy' (4 comma-separated "
+                     "numbers)")
+        try:
+            args.intrinsics = tuple(float(t) for t in parts)
+        except ValueError:
+            ap.error("--intrinsics values must be numbers")
+    else:
+        args.intrinsics = None
+
     import torch
     device = f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu"
     if torch.cuda.is_available():
         torch.cuda.set_device(args.gpu)
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
+    # YOLO-World set_classes needs weights/clip/ViT-B-32.pt regardless of the
+    # caller's cwd; point ultralytics' weights_dir at this repo's weights/.
+    deploy_utils.ensure_ultralytics_weights_dir()
+    print(f"[out] outputs -> {os.path.abspath(args.out_dir)}", flush=True)
 
     # frames
     if args.frames == "all":
@@ -473,27 +576,56 @@ def main():
     # --- manual reference wire (independent hand-specified standard) -------- #
     ref_tree = None
     if args.write_ref:
-        _, allpts = accumulate_frames(args.data_dir)
-        wire_pts, (wL, wu) = reference_wire(allpts)
-        ref_tree = cKDTree(wire_pts)
-        print(f"[ref] manual reference wire: {len(wire_pts)} pts "
-              f"(segment {wL:.2f}m, dir {np.round(wu, 3)})", flush=True)
+        print("[warn] --write_ref: ref 距离来自原作者为本场景手工标注的参考导线，"
+              "仅对随附演示数据有效；第三方数据上请保持关闭（默认）",
+              file=sys.stderr, flush=True)
+        try:
+            _, allpts = accumulate_frames(args.data_dir)
+            wire_pts, (wL, wu) = reference_wire(allpts)
+            ref_tree = cKDTree(wire_pts)
+            print(f"[ref] manual reference wire: {len(wire_pts)} pts "
+                  f"(segment {wL:.2f}m, dir {np.round(wu, 3)})", flush=True)
+        except Exception as e:
+            print(f"[warn] ref computation failed, ref/bias columns left "
+                  f"empty: {e}", file=sys.stderr, flush=True)
+            if args.strict:
+                raise
 
     # --- wire geometry ------------------------------------------------------ #
     ttpla = None
     wire_curve = None
-    if args.wire_mode == "per_frame":
+    if args.wire_mode == "per_frame" or args.wire_curve == "recompute":
+        if not os.path.exists(args.ttpla_weights):
+            raise SystemExit(f"TTPLA weights not found at {args.ttpla_weights} "
+                             f"(per_frame wire mode needs them; see "
+                             f"weights/README.md)")
         from ultralytics import YOLO
-        ttpla = YOLO(args.ttpla_weights)
+        ttpla = YOLO(args.ttpla_weights).to(device)
+    if args.wire_mode == "per_frame":
         wire_info = {"mode": "per_frame"}    # curve re-detected per frame below
     elif args.wire_curve == "recompute":
-        from ultralytics import YOLO
-        ttpla = YOLO(args.ttpla_weights)
         wire_curve, wire_info = recompute_wire_curve(args, ttpla, stems)
         wire_info["mode"] = "catenary"
     else:
         wire_curve = load_wire_curve(args.wire_curve)
         wire_info = {"loaded_from": args.wire_curve, "mode": "catenary"}
+        # provenance guard: the bundled catenary curve was fitted on the demo
+        # scene -- warn when it is applied to frames it was not built from.
+        if os.path.abspath(args.wire_curve) == os.path.abspath(DEFAULT_WIRE_CURVE):
+            ref = "unknown"
+            with open(args.wire_curve) as f:
+                for line in f:
+                    m = re.search(r"ref_frame=(\S+)", line)
+                    if m:
+                        ref = m.group(1)
+                        break
+            if ref not in stems:
+                print(f"[warn] catenary mode: "
+                      f"{os.path.basename(args.wire_curve)} was fitted on "
+                      f"frame {ref}, which is not in the current frame set -- "
+                      f"the static wire curve is scene-specific; use "
+                      f"--wire_curve recompute or --wire_mode per_frame on new "
+                      f"data", file=sys.stderr, flush=True)
 
     # --- person models (once) ---------------------------------------------- #
     yolo_path = args.yolo_weights or os.path.join(
@@ -501,7 +633,11 @@ def main():
     if not os.path.exists(yolo_path):
         raise SystemExit(f"YOLO-World weights not found at {yolo_path}")
     det_model = build_yoloworld(yolo_path, device)
-    det_model.set_classes(["person"])
+    categories = [c.strip() for c in args.categories.split(",") if c.strip()]
+    if not categories:
+        raise SystemExit("--categories must name at least one category text")
+    det_model.set_classes(categories)
+    print(f"[detect] open-vocab categories: {categories}", flush=True)
     sam2_predictor = None
     if args.sam2:
         ckpt = args.sam2_ckpt or os.path.join(
@@ -514,15 +650,18 @@ def main():
     # --- loop over frames -------------------------------------------------- #
     results = []
     n_ok = 0
+    n_soft = 0
     for i, stem in enumerate(stems, 1):
         r = process_frame(stem, wire_curve, ttpla, det_model, sam2_predictor,
                           args, script_dir, ref_tree)
         if r is None:
             print(f"[{i}/{len(stems)}] {stem}: missing files", flush=True)
+            n_soft += 1
             continue
         if "error" in r:
             print(f"[{i}/{len(stems)}] {stem}: {r['error']}", flush=True)
             results.append(r)
+            n_soft += 1
             continue
         n_ok += 1
         results.append(r)
@@ -534,28 +673,7 @@ def main():
               f"{ref_s} (score {p['score']:.2f}, {p['n_points']} pts)", flush=True)
 
     # --- top-level outputs -------------------------------------------------- #
-    os.makedirs(args.out_dir, exist_ok=True)
-    out = {r["frame"]: r for r in results}
-    with open(os.path.join(args.out_dir, "results.json"), "w") as f:
-        json.dump(out, f, indent=2)
-
-    with open(os.path.join(args.out_dir, "summary.csv"), "w") as f:
-        f.write("frame,person_x,person_y,person_z,person_dist_m,wire_dist_m,"
-                "wire_person_min_dist_m,ref_wire_person_min_dist_m,"
-                "wire_person_bias_m,score,n_points\n")
-        for r in results:
-            if "error" in r:
-                f.write(f"{r['frame']},,,,,,,,,,{r['error']}\n")
-                continue
-            p = r["person"]
-            c = p["center"]
-            ref = r.get("ref_wire_person_min_distance_m")
-            bias = r.get("wire_person_bias_m")
-            f.write(f"{r['frame']},{c[0]},{c[1]},{c[2]},{p['distance_m']},"
-                    f"{r['wire']['distance_m']},{r['wire_person_min_distance_m']},"
-                    f"{ref if ref is not None else ''},"
-                    f"{bias if bias is not None else ''},"
-                    f"{p['score']},{p['n_points']}\n")
+    deploy_utils.write_run_outputs(args.out_dir, results)
 
     pws = [r["wire_person_min_distance_m"] for r in results
            if "wire_person_min_distance_m" in r]
@@ -567,6 +685,17 @@ def main():
         print(f"  wire->person: mean={np.mean(pws):.3f}m "
               f"std={np.std(pws):.3f}m min={np.min(pws):.3f} max={np.max(pws):.3f}")
         print(f"  person dist  : mean={np.mean(pds):.3f}m std={np.std(pds):.3f}m")
+
+    # exit codes: 0 = done (>=1 frame ok), 1 = fatal, 2 = usage (argparse)
+    if n_ok == 0:
+        print(f"[fatal] no frame produced a result ({n_soft} soft error(s))",
+              file=sys.stderr, flush=True)
+        sys.exit(1)
+    if args.strict and n_soft > 0:
+        print(f"[fatal] --strict: {n_soft} soft frame error(s) -> exit 1",
+              file=sys.stderr, flush=True)
+        sys.exit(1)
+    sys.exit(0)
 
 
 if __name__ == "__main__":

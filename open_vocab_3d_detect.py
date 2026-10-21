@@ -30,6 +30,7 @@ import argparse
 import glob
 import json
 import os
+import sys
 
 import cv2
 import numpy as np
@@ -769,6 +770,10 @@ def parse_args():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--data_dir", default=DEFAULT_DATA_DIR)
     p.add_argument("--categories", default="person")
+    p.add_argument("--intrinsics", default=None,
+                   help="camera intrinsics 'fx,fy,cx,cy' (comma-separated); "
+                        "default: built-in 1280x720 calibration "
+                        "(622.6716,694.2052,644.2907,522.0188)")
     p.add_argument("--out_dir", default="viz")
     p.add_argument("--frames", default="all",
                    help="'all' or comma-separated stems (e.g. img_1700603346.892936)")
@@ -845,6 +850,17 @@ def parse_args():
 
 def main():
     args = parse_args()
+    if args.intrinsics:
+        parts = [t.strip() for t in args.intrinsics.split(",")]
+        if len(parts) != 4:
+            raise SystemExit("--intrinsics must be 'fx,fy,cx,cy' "
+                             "(4 comma-separated numbers)")
+        try:
+            args.intrinsics = tuple(float(t) for t in parts)
+        except ValueError:
+            raise SystemExit("--intrinsics values must be numbers")
+    else:
+        args.intrinsics = None
     device = f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu"
     if torch.cuda.is_available():
         torch.cuda.set_device(args.gpu)
@@ -905,6 +921,10 @@ def main():
         pil = Image.open(img_path).convert("RGB")
         image_np = np.array(pil)                     # (H,W,3) RGB uint8
         H, W = image_np.shape[:2]
+        if (H, W) != (720, 1280):
+            print(f"[warn] {stem}: image is {W}x{H}, expected 1280x720 -- the "
+                  f"built-in intrinsics are calibrated for 1280x720; pass "
+                  f"--intrinsics to override", file=sys.stderr, flush=True)
         points = load_lidar(lidar_path)              # (N,3) lidar frame
         T_lidar_to_cam = load_extrinsic(ext_path)    # 4x4
         p_h = np.concatenate([points, np.ones((len(points), 1))], axis=1)
@@ -916,7 +936,10 @@ def main():
         if sam2_predictor is not None and len(boxes) > 0:
             masks = run_sam2(sam2_predictor, image_np, boxes)
 
-        u, v, z = project(p_cam)
+        if args.intrinsics is None:
+            u, v, z = project(p_cam)
+        else:
+            u, v, z = project(p_cam, *args.intrinsics)
         valid = (z > args.min_dist) & (u >= 0) & (u < W - 1) & (v >= 0) & (v < H - 1)
         ui = np.floor(u[valid]).astype(int)
         vi = np.floor(v[valid]).astype(int)
