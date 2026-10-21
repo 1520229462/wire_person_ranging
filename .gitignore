@@ -1,5 +1,6 @@
 # 模型权重（用 download_weights.py 重新下载）
 weights/
+!weights/README.md
 
 # 预计算的深度图（可重算）
 data/radar_depth/

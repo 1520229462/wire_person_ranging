@@ -1,0 +1,4 @@
+# 可选依赖：OWLv2 开集检测兜底（open_vocab_3d_detect.py --detector owlv2）
+# 主路径（YOLO-World）不需要；仅在使用 OWLv2 时安装：
+#   pip install -r requirements-owlv2.txt
+transformers==5.17.0

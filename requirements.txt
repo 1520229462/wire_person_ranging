@@ -1,9 +1,19 @@
-# Zero-training open-vocab 3D detection. torch/torchvision/numpy/opencv come from
-# the base env (ov3d = clone of unicalib, torch 2.5.1+cu118). Extra deps:
-transformers>=5.0     # OWLv2 open-vocab detector (fallback, --detector owlv2)
-ultralytics>=8.1.0    # YOLO-World open-vocab detector (default, --detector yoloworld)
-sam2>=1.1.0           # SAM2 mask refinement (--sam2 / --no-sam2)
-openai-clip==1.0.1    # CLIP text encoder, required by YOLO-World's set_classes.
-#   NOTE: openai-clip 1.0.1 does `from pkg_resources import packaging`; with
-#   setuptools>=81 pkg_resources is gone. Either pin setuptools<81 or patch
-#   clip/clip.py line 6 to `import packaging` (standalone `packaging` is present).
+# wire_person_ranging 核心依赖（主路径：range_person_wire.py / ranging_api.py）
+#
+# PyTorch 请先按本机 CUDA 版本安装（本仓库验证于 torch 2.5.1+cu118, CUDA 11.8）：
+#   pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu118
+# （纯 CPU 机器可装 CPU 版 torch；其余包照常。）
+numpy
+scipy
+opencv-python
+Pillow
+matplotlib
+requests
+huggingface_hub
+ultralytics==8.4.163     # YOLO-World 开集检测（默认）+ TTPLA 导线分割模型
+sam2==1.1.0              # SAM2 掩膜精化（--sam2 / --no-sam2）
+openai-clip==1.0.1       # CLIP 文本编码器，YOLO-World set_classes 需要。
+#   NOTE: openai-clip 1.0.1 内部 `from pkg_resources import packaging`；setuptools>=81
+#   移除了 pkg_resources。要么 pin setuptools<81，要么把 clip/clip.py 第 6 行
+#   改为 `import packaging`（环境里已有独立的 packaging 包）。
+setuptools<81
