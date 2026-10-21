@@ -1,0 +1,9 @@
+# Zero-training open-vocab 3D detection. torch/torchvision/numpy/opencv come from
+# the base env (ov3d = clone of unicalib, torch 2.5.1+cu118). Extra deps:
+transformers>=5.0     # OWLv2 open-vocab detector (fallback, --detector owlv2)
+ultralytics>=8.1.0    # YOLO-World open-vocab detector (default, --detector yoloworld)
+sam2>=1.1.0           # SAM2 mask refinement (--sam2 / --no-sam2)
+openai-clip==1.0.1    # CLIP text encoder, required by YOLO-World's set_classes.
+#   NOTE: openai-clip 1.0.1 does `from pkg_resources import packaging`; with
+#   setuptools>=81 pkg_resources is gone. Either pin setuptools<81 or patch
+#   clip/clip.py line 6 to `import packaging` (standalone `packaging` is present).

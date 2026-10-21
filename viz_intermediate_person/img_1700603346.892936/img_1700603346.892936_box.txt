@@ -1,0 +1,4 @@
+person score=0.880 distance=4.602m center=[4.166, -1.598, 1.125] extents=[0.975, 0.453, 0.17] height_z=0.977
+wire score=1.000 distance=9.514m center=[6.677, -5.782, 3.536] extents=[0.717, 0.173, 0.089] height_z=0.162
+wire score=1.000 distance=6.405m center=[4.266, -4.559, 1.428] extents=[0.488, 0.112, 0.054] height_z=0.430
+wire score=1.000 distance=9.846m center=[9.477, -0.407, 2.64] extents=[1.448, 0.161, 0.056] height_z=1.319

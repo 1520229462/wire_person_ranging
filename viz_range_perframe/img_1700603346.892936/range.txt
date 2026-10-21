@@ -1,0 +1,5 @@
+frame=img_1700603346.892936
+person  center=[4.166, -1.598, 1.125] distance=4.602m (template matching, score=0.88)
+wire    endpoints=[4.364, -1.937, 3.0] -> [4.124, -2.776, 1.504] distance=5.194m (per_frame)
+wire->person min distance = 0.905m (person surface point [4.21, -1.693, 1.501] <-> wire point [4.238, -2.384, 2.085])
+wire->person min distance (ref) = 0.896m  (bias algo-ref = +0.009m)

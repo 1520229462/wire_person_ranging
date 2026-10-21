@@ -1,0 +1,6 @@
+# VGGT shape-template matching, person detection 0
+template points = 128 (nearest depth mode, FPS)
+radar clusters = 3
+cluster 0: n=149 cam-z~6.16m chamfer=0.6128
+cluster 1: n=3 skipped (< min_points)
+cluster 2: n=71 cam-z~1.71m chamfer=0.2559  <-- chosen

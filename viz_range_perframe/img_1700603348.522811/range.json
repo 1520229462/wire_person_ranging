@@ -1,0 +1,60 @@
+{
+  "frame": "img_1700603348.522811",
+  "person": {
+    "center": [
+      4.144,
+      -1.615,
+      1.201
+    ],
+    "extents": [
+      1.042,
+      0.456,
+      0.201
+    ],
+    "score": 0.8948,
+    "n_points": 75,
+    "distance_m": 4.607
+  },
+  "all_persons": [
+    {
+      "center": [
+        4.144,
+        -1.615,
+        1.201
+      ],
+      "score": 0.8948,
+      "distance_m": 4.607,
+      "n_points": 75
+    }
+  ],
+  "wire": {
+    "mode": "per_frame",
+    "endpoints": [
+      [
+        4.38,
+        -1.953,
+        3.0
+      ],
+      [
+        4.195,
+        -2.564,
+        1.796
+      ]
+    ],
+    "length_m": 1.395,
+    "distance_m": 5.228
+  },
+  "wire_person_min_distance_m": 0.804,
+  "ref_wire_person_min_distance_m": 0.82,
+  "wire_person_bias_m": -0.016,
+  "closest_person_point": [
+    4.186,
+    -1.813,
+    1.451
+  ],
+  "closest_wire_point": [
+    4.202,
+    -2.521,
+    1.832
+  ]
+}

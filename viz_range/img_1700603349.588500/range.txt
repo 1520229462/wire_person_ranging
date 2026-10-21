@@ -1,0 +1,4 @@
+frame=img_1700603349.588500
+person  center=[4.151, -1.614, 1.156] distance=4.601m (template matching, score=0.88)
+wire    endpoints=[4.065, -2.869, 1.387] -> [4.344, -2.099, 2.712] distance=5.165m (catenary)
+wire->person min distance = 0.860m (person surface point [4.184, -1.852, 1.332] <-> wire point [4.171, -2.575, 1.798])

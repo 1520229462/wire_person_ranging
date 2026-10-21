@@ -1,0 +1,15 @@
+# 模型权重（用 download_weights.py 重新下载）
+weights/
+
+# 预计算的深度图（可重算）
+data/radar_depth/
+data/vggt_depth/
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+
+# 个人微调版文档（工作副本，不进公开仓库）
+技术文档（个人微调版）.docx
+技术文档（个人微调版2）.docx
+技术文档（个人微调版）.docx.bak
